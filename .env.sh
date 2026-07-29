@@ -1,4 +1,4 @@
-STREAMER_USERNAME=usrnani1
+STREAMER_USERNAME=@usrnani1
 SESSION_ID=24efea21ae204661382b31e612f67ae3
 WELCOME_MESSAGE=مرحباً بكم في البث! 🌟 المرجو المتابعة 🙏
 SPAM_INTERVAL=60
