@@ -1,13 +1,13 @@
 {
   "name": "tiktok-bot",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node server.js"
   },
   "dependencies": {
+    "express": "^4.18.2",
+    "puppeteer": "^21.0.0",
     "dotenv": "^16.3.1",
-    "node-fetch": "^2.7.0",
-    "axios": "^1.6.0",
-    "ws": "^8.14.0"
+    "node-fetch": "^2.7.0"
   }
 }
