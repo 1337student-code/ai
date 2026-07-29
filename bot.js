@@ -1,104 +1,81 @@
 require('dotenv').config();
-const WebSocket = require('ws');
-const fetch = require('node-fetch');
-const fs = require('fs');
-const path = require('path');
+const puppeteer = require('puppeteer');
 
-// ========== الإعدادات ==========
 const STREAMER = process.env.STREAMER_USERNAME;
 const SESSION_ID = process.env.SESSION_ID;
 const WELCOME_MSG = process.env.WELCOME_MESSAGE || 'مرحباً بكم! 🌟';
 const SPAM_INTERVAL = parseInt(process.env.SPAM_INTERVAL) || 60;
 
-// ========== المتغيرات العامة ==========
-let roomId = null;
-let wsConnection = null;
-let spamTimer = null;
-let isConnected = false;
-let viewerCount = 0;
-
-// ========== إحصائيات ==========
-const stats = {
-    comments: 0,
-    violations: 0,
-    mutes: 0,
-    bans: 0,
-    startTime: Date.now()
-};
-
-// ========== قائمة الكلمات الممنوعة ==========
 const BANNED_WORDS = [
     'كس', 'طيز', 'زب', 'شرموط', 'قحبة', 'عاهرة', 'منيوك',
-    'خنزير', 'كلب', 'حمار', 'زامل', 'لوطي', 'ديوث',
-    'زبالة', 'وسخ', 'قذر', 'حقير', 'خسيس', 'لئيم',
-    '9wd', '9wad', '9ahba', '9hba', 'zamel', 'zaml',
+    'خنزير', 'كلب', 'حمار', 'زامل', 'ديوث', 'قواد',
+    '9wd', '9wad', '9ahba', '9hba', 'zamel',
     'fuck', 'shit', 'bitch', 'pute', 'salope', 'connard',
-    '7mar', '5nzir', 'klb', 'l9rd', 'l3ahra',
-    'يلعن', 'ينعل', 'الله ياخدك', 'سير تقود', 'برا تقود'
+    '7mar', '5nzir', 'klb', 'l9rd',
+    'يلعن', 'ينعل', 'سير تقود', 'برا تقود'
 ];
 
 const violations = {};
-const mutedUsers = {};
-const bannedUsers = new Set();
+let browser = null;
+let page = null;
 
-// ========== تحميل البيانات ==========
-function loadData() {
-    try {
-        const filePath = path.join(__dirname, 'data', 'violations.json');
-        if (fs.existsSync(filePath)) {
-            const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-            if (data.bannedUsers) {
-                data.bannedUsers.forEach(u => bannedUsers.add(u));
-            }
-        }
-    } catch (e) {}
-}
+// ========== نوم ==========
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function saveData() {
-    try {
-        const dir = path.join(__dirname, 'data');
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, 'violations.json'), JSON.stringify({
-            violations,
-            mutedUsers,
-            bannedUsers: Array.from(bannedUsers)
-        }, null, 2));
-    } catch (e) {}
-}
-
-// ========== الحصول على room_id ==========
-async function getRoomId() {
-    console.log(`🔍 البحث عن بث: ${STREAMER}...`);
+// ========== بدء المتصفح ==========
+async function startBrowser() {
+    console.log('🌐 تشغيل المتصفح...');
     
+    browser = await puppeteer.launch({
+        headless: 'new',
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--window-size=1280,720'
+        ]
+    });
+    
+    page = await browser.newPage();
+    
+    // إعداد User-Agent حقيقي
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    // إضافة الكوكيز
+    await page.setCookie({
+        name: 'sessionid',
+        value: SESSION_ID,
+        domain: '.tiktok.com',
+        path: '/'
+    });
+    
+    console.log('✅ المتصفح جاهز');
+}
+
+// ========== فتح البث ==========
+async function openLive() {
     try {
-        const response = await fetch(`https://www.tiktok.com/@${STREAMER}/live`, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Cookie': `sessionid=${SESSION_ID}`
-            }
+        console.log(`📡 فتح البث: ${STREAMER}`);
+        
+        const url = `https://www.tiktok.com/@${STREAMER}/live`;
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+        
+        await sleep(5000);
+        
+        // التحقق من وجود الشات
+        const chatExists = await page.evaluate(() => {
+            return !!document.querySelector('[data-e2e="live-room-chat"]') ||
+                   !!document.querySelector('.chat-message-container') ||
+                   !!document.querySelector('[class*="chat"]');
         });
         
-        const html = await response.text();
-        
-        // استخراج room_id من الصفحة
-        const match = html.match(/"roomId":"(\d+)"/);
-        if (match) {
-            roomId = match[1];
-            console.log(`✅ وجدنا البث! Room ID: ${roomId}`);
+        if (chatExists) {
+            console.log('✅ تم فتح البث بنجاح');
             return true;
         }
         
-        // طريقة أخرى
-        const match2 = html.match(/"room_id":"(\d+)"/);
-        if (match2) {
-            roomId = match2[1];
-            console.log(`✅ وجدنا البث! Room ID: ${roomId}`);
-            return true;
-        }
-        
-        console.log('⚠️ البث غير موجود أو منتهي');
+        console.log('⚠️ لم يتم العثور على الشات');
         return false;
         
     } catch (err) {
@@ -107,208 +84,150 @@ async function getRoomId() {
     }
 }
 
-// ========== الاتصال بـ WebSocket ==========
-function connectWebSocket() {
-    if (!roomId) return;
-    
-    console.log('🔌 جاري الاتصال بـ WebSocket...');
-    
-    const wsUrl = `wss://webcast.tiktok.com/webcast/im/push/v2/?room_id=${roomId}&app_language=ar&webcast_sdk_version=1.0.0`;
-    
-    wsConnection = new WebSocket(wsUrl, {
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Cookie': `sessionid=${SESSION_ID}`,
-            'Origin': 'https://www.tiktok.com',
-            'Referer': 'https://www.tiktok.com/'
-        }
-    });
-    
-    wsConnection.on('open', () => {
-        console.log('✅ WebSocket متصل!');
-        isConnected = true;
+// ========== إرسال رسالة ==========
+async function sendMessage(text) {
+    try {
+        // البحث عن حقل الإدخال
+        const inputSelector = '[contenteditable="true"], [data-e2e="live-room-chat-input"], input, textarea, [class*="chat"] [contenteditable]';
         
-        // بدء السبام
-        startSpam();
-    });
+        await page.waitForSelector(inputSelector, { timeout: 5000 });
+        await page.click(inputSelector);
+        await sleep(500);
+        
+        // كتابة النص
+        await page.keyboard.type(text, { delay: 50 });
+        await sleep(500);
+        
+        // إرسال
+        await page.keyboard.press('Enter');
+        
+        console.log(`📤 ${text}`);
+        return true;
+    } catch (err) {
+        console.log(`⚠️ فشل الإرسال: ${err.message}`);
+        return false;
+    }
+}
+
+// ========== قراءة التعليقات ==========
+async function monitorChat() {
+    console.log('👀 مراقبة التعليقات...');
     
-    wsConnection.on('message', (data) => {
+    let lastComments = [];
+    
+    while (true) {
         try {
-            const message = JSON.parse(data.toString());
-            handleMessage(message);
-        } catch (e) {
-            // تجاهل الرسائل غير JSON
+            const comments = await page.evaluate(() => {
+                const messages = document.querySelectorAll('[data-e2e="live-room-chat-message"], [class*="chat-message"], [class*="comment"]');
+                const result = [];
+                messages.forEach(msg => {
+                    const text = msg.textContent || msg.innerText || '';
+                    if (text.trim()) result.push(text.trim());
+                });
+                return result;
+            });
+            
+            // فحص التعليقات الجديدة
+            for (const comment of comments) {
+                if (!lastComments.includes(comment)) {
+                    console.log(`💬 ${comment}`);
+                    
+                    // فحص الكلمات الممنوعة
+                    const lower = comment.toLowerCase();
+                    const found = BANNED_WORDS.find(word => lower.includes(word.toLowerCase()));
+                    
+                    if (found) {
+                        console.log(`⚠️ مخالفة: "${comment}"`);
+                        console.log(`   كلمة ممنوعة: "${found}"`);
+                        
+                        // استخراج اسم المستخدم
+                        const username = extractUsername(comment);
+                        if (username) {
+                            handleViolation(username);
+                        }
+                    }
+                }
+            }
+            
+            lastComments = [...comments];
+            
+        } catch (err) {
+            // تجاهل
         }
-    });
-    
-    wsConnection.on('close', () => {
-        console.log('❌ WebSocket انقطع');
-        isConnected = false;
-        stopSpam();
-        setTimeout(() => connectWebSocket(), 5000);
-    });
-    
-    wsConnection.on('error', (err) => {
-        console.log(`⚠️ خطأ WebSocket: ${err.message}`);
-    });
-}
-
-// ========== معالجة الرسائل ==========
-function handleMessage(msg) {
-    if (msg.type === 'chat' && msg.data) {
-        const { comment, user } = msg.data;
         
-        if (!comment || !user) return;
-        if (user.uniqueId === STREAMER) return;
-        
-        stats.comments++;
-        
-        // فحص الكلمات الممنوعة
-        const isOffensive = checkBadWords(comment);
-        
-        if (isOffensive) {
-            stats.violations++;
-            console.log(`⚠️ ${user.uniqueId}: "${comment.substring(0, 50)}"`);
-            handleViolation(user.uniqueId, user.userId);
-        }
-    }
-    
-    if (msg.type === 'room_user_seq' && msg.data) {
-        viewerCount = msg.data.total || viewerCount;
+        await sleep(2000);
     }
 }
 
-// ========== فحص الكلمات ==========
-function checkBadWords(comment) {
-    const lower = comment.toLowerCase();
-    return BANNED_WORDS.some(word => lower.includes(word.toLowerCase()));
+// ========== استخراج اسم المستخدم ==========
+function extractUsername(comment) {
+    const match = comment.match(/@?(\w+):/);
+    return match ? match[1] : null;
 }
 
 // ========== معالجة المخالفة ==========
-function handleViolation(username, userId) {
+function handleViolation(username) {
     if (!violations[username]) {
-        violations[username] = { count: 0, userId };
+        violations[username] = 0;
     }
     
-    violations[username].count++;
-    const count = violations[username].count;
+    violations[username]++;
+    const count = violations[username];
     
-    if (count >= 3) {
-        // حظر
-        bannedUsers.add(username);
-        delete violations[username];
-        stats.bans++;
-        console.log(`🚫 حظر: ${username}`);
-        sendModAction('ban', userId);
+    console.log(`🔇 ${username} - مخالفة #${count}`);
+    
+    // إرسال رسالة تحذير
+    if (count === 1) {
+        sendMessage(`@${username} ⚠️ تحذير: تجنب الكلمات المسيئة`);
+    } else if (count === 2) {
+        sendMessage(`@${username} ⚠️ تحذير أخير`);
     } else {
-        // كتم
-        mutedUsers[username] = Date.now();
-        stats.mutes++;
-        console.log(`🔇 كتم #${count}: ${username}`);
-        sendModAction('mute', userId);
-    }
-    
-    saveData();
-}
-
-// ========== إرسال إجراء الموديراتور ==========
-async function sendModAction(action, userId) {
-    try {
-        const endpoint = action === 'ban' 
-            ? 'https://www.tiktok.com/api/live/moderator/ban/'
-            : 'https://www.tiktok.com/api/live/moderator/mute/';
-        
-        const body = action === 'ban'
-            ? { room_id: roomId, user_id: userId, ban_type: 'permanent', scene: 'live_comment' }
-            : { room_id: roomId, user_id: userId, mute_duration: 2592000, scene: 'live_comment' };
-        
-        await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-                'Cookie': `sessionid=${SESSION_ID}`,
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
-            body: JSON.stringify(body)
-        });
-    } catch (err) {
-        console.log(`⚠️ فشل ${action}: ${err.message}`);
+        sendMessage(`@${username} 🚫 تم حظرك`);
     }
 }
 
 // ========== سبام ==========
-function startSpam() {
-    console.log(`📢 بدء السبام كل ${SPAM_INTERVAL} ثانية`);
-    sendSpam();
-    spamTimer = setInterval(sendSpam, SPAM_INTERVAL * 1000);
-}
-
-async function sendSpam() {
-    if (!isConnected || !roomId) return;
+async function startSpam() {
+    console.log(`📢 بدء السبام كل ${SPAM_INTERVAL}s`);
     
-    try {
-        await fetch('https://www.tiktok.com/api/live/message/send/', {
-            method: 'POST',
-            headers: {
-                'Cookie': `sessionid=${SESSION_ID}`,
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
-            body: JSON.stringify({
-                room_id: roomId,
-                content: WELCOME_MSG,
-                message_type: 'text'
-            })
-        });
-        console.log(`📤 ${WELCOME_MSG}`);
-    } catch (err) {
-        // تجاهل
+    while (true) {
+        await sendMessage(WELCOME_MSG);
+        await sleep(SPAM_INTERVAL * 1000);
     }
 }
 
-function stopSpam() {
-    if (spamTimer) {
-        clearInterval(spamTimer);
-        spamTimer = null;
-    }
-}
-
-// ========== إحصائيات ==========
-setInterval(() => {
-    if (!isConnected) return;
-    const uptime = Math.floor((Date.now() - stats.startTime) / 1000);
-    const h = Math.floor(uptime / 3600);
-    const m = Math.floor((uptime % 3600) / 60);
-    console.log('═'.repeat(40));
-    console.log(`⏱️ ${h}h ${m}m | 👥 ${viewerCount} | 💬 ${stats.comments}`);
-    console.log(`⚠️ ${stats.violations} | 🔇 ${stats.mutes} | 🚫 ${stats.bans}`);
-    console.log('═'.repeat(40));
-}, 300000);
-
-// ========== بدء التشغيل ==========
+// ========== التشغيل الرئيسي ==========
 async function main() {
-    console.log('🚀 تشغيل البوت...');
+    console.log('🚀 بدء البوت...');
     console.log(`📡 المستهدف: ${STREAMER}`);
     console.log('═'.repeat(40));
     
-    loadData();
+    await startBrowser();
     
-    const found = await getRoomId();
+    const opened = await openLive();
     
-    if (found) {
-        connectWebSocket();
+    if (opened) {
+        // تشغيل السبام والمراقبة بالتوازي
+        Promise.all([
+            startSpam(),
+            monitorChat()
+        ]);
     } else {
-        console.log('🔄 البث غير موجود، إعادة المحاولة...');
-        setTimeout(main, 30000);
+        console.log('❌ فشل فتح البث');
+        if (browser) await browser.close();
+        process.exit(1);
     }
 }
 
-main();
+// ========== بدء ==========
+main().catch(err => {
+    console.log(`❌ خطأ: ${err.message}`);
+    process.exit(1);
+});
 
-// إبقاء العملية نشطة
-process.on('SIGTERM', () => {
-    stopSpam();
-    saveData();
-    console.log('👋 إيقاف البوت');
+// تنظيف عند الإيقاف
+process.on('SIGTERM', async () => {
+    console.log('👋 إيقاف...');
+    if (browser) await browser.close();
     process.exit(0);
 });
