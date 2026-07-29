@@ -1,0 +1,17 @@
+{
+  "name": "tiktok-bot",
+  "version": "1.0.0",
+  "description": "TikTok Moderator Bot",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "engines": {
+    "node": "18.x"
+  },
+  "dependencies": {
+    "tiktok-live-connector": "^1.0.0",
+    "dotenv": "^16.3.1",
+    "node-fetch": "^2.7.0"
+  }
+}
