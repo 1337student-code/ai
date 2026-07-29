@@ -2,10 +2,9 @@
 # ضع القيم التالية:
 
 # اسم مستخدم صاحب البث (وليس حساب البوت)
-STREAMER_USERNAME=username_صاحب_البث
-
+STREAMER_USERNAME=usrnani1
 # Session ID من حساب البوت (الموديراتور)
-SESSION_ID=7a8f9c0b1d2e3f4a5b6c7d8e9f0a1b2c
+SESSION_ID=24efea21ae204661382b31e612f67ae3
 
 # رسالة الترحيب للسبام
 WELCOME_MESSAGE=مرحباً بكم في البث! 🌟 المرجو المتابعة فضلاً وليس أمراً 🙏💜
